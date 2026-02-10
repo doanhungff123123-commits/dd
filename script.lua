@@ -1,424 +1,382 @@
--- HungDao9999 | Bay + Xuyên Tường + Instant Pickup
+-- AUTO COLLECT - SỬA LỖI HOÀN CHỈNH
+-- Tuân thủ 9 giai đoạn chính xác
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local ProximityPromptService = game:GetService("ProximityPromptService")
 
 local player = Players.LocalPlayer
-local PlayerGui = player:WaitForChild("PlayerGui")
+local AUTO_COLLECT = true
+local FLY_SPEED = 300
+local SAFETY_BUFFER = 3
 
--- Xóa GUI cũ
-if PlayerGui:FindFirstChild("HungDaoFlyGUI") then
-	PlayerGui.HungDaoFlyGUI:Destroy()
-	task.wait(0.3)
-end
+-- VECTOR AB
+local A = Vector3.new(153, 4.15, -140)
+local B = Vector3.new(4027, -1, -135)
+local AB = B - A
+local AB_LENGTH = AB.Magnitude
 
--- CONFIG
-local SPEED = 500
-local POINTS_GO = {
-	Vector3.new(147, 3.38, -138),
-	Vector3.new(2588, -0.43, -138.4),
-	Vector3.new(2588.35, -0.43, -100.66)
+local MIN_Y = -5
+local MAX_Y = 7
+
+local TSUNAMI_SPEEDS = {
+    ["BeastWave"] = 374.36,
+    ["BeastWave_Visual"] = 377.64,
+    ["SnakeWave"] = 91.34,
+    ["SnakeWave_Visual"] = 93.04,
+    ["WackyWave"] = 72.00,
+    ["WackyWave_Visual"] = 74.54,
+    ["Wave1"] = 113.69,
+    ["Wave1_Visual"] = 115.93,
+    ["Wave2"] = 123.20,
+    ["Wave2_Visual"] = 124.20,
+    ["Wave3"] = 151.00,
+    ["Wave3_Visual"] = 157.04,
+    ["Wave4"] = 179.91,
+    ["Wave4_Visual"] = 185.90,
+    ["Wave5"] = 213.50,
+    ["Wave5_Visual"] = 220.31,
+    ["WonkyWave"] = 85.58,
+    ["WonkyWave_Visual"] = 87.51,
 }
-local POINTS_BACK = {
-	Vector3.new(2588.35, -0.43, -100.66),
-	Vector3.new(2588, -0.43, -138.4),
-	Vector3.new(147, 3.38, -138)
-}
-local arrivalThreshold = 5
 
--- STATE
-local ENABLED = false
-local flyConn, noclipConn, promptConn, robuxPromptConn
+print("🎮 AUTO COLLECT - FIXED VERSION")
 
--- GET CHARACTER
-local function getChar()
-	local c = player.Character or player.CharacterAdded:Wait()
-	return c, c:WaitForChild("HumanoidRootPart"), c:WaitForChild("Humanoid")
+-- ============================================
+-- XÓA TƯỜNG
+-- ============================================
+local function nuke(v)
+    pcall(function() v:Destroy() end)
 end
 
--- BLOCK ROBUX PROMPTS
-local function blockRobuxPrompts()
-	if robuxPromptConn then robuxPromptConn:Disconnect() end
-	
-	robuxPromptConn = ProximityPromptService.PromptShown:Connect(function(prompt)
-		pcall(function()
-			if prompt.RequiresLineOfSight == false or 
-			   prompt.Name:lower():find("buy") or 
-			   prompt.Name:lower():find("purchase") or
-			   prompt.Name:lower():find("robux") or
-			   prompt.ActionText:lower():find("buy") or
-			   prompt.ActionText:lower():find("purchase") then
-				prompt.Enabled = false
-				task.wait(0.1)
-				prompt.Enabled = true
-				prompt.MaxActivationDistance = 0
-			end
-		end)
-	end)
-	
-	task.spawn(function()
-		while ENABLED or robuxPromptConn do
-			pcall(function()
-				for _, gui in pairs(PlayerGui:GetChildren()) do
-					if gui:IsA("ScreenGui") then
-						for _, obj in pairs(gui:GetDescendants()) do
-							if obj:IsA("TextLabel") or obj:IsA("TextButton") then
-								local text = obj.Text:lower()
-								if text:find("robux") or text:find("purchase") or text:find("buy") then
-									local parent = obj.Parent
-									while parent and parent ~= gui do
-										if parent:IsA("Frame") then
-											parent.Visible = false
-										end
-										parent = parent.Parent
-									end
-								end
-							end
-						end
-					end
-				end
-			end)
-			task.wait(0.5)
-		end
-	end)
+for _, v in ipairs(workspace:GetDescendants()) do
+    if v:IsA("TouchTransmitter") or v:IsA("ProximityPrompt") or v:IsA("ClickDetector") then
+        nuke(v)
+    end
+    if v:IsA("Part") or v:IsA("MeshPart") then
+        local n = v.Name:lower()
+        if n:find("vip") or n:find("premium") or n:find("cao") then
+            nuke(v)
+        end
+    end
 end
 
-local function unblockRobuxPrompts()
-	if robuxPromptConn then 
-		robuxPromptConn:Disconnect() 
-		robuxPromptConn = nil
-	end
-end
-
--- NOCLIP
-local function enableNoclip(char)
-	if noclipConn then noclipConn:Disconnect() end
-	noclipConn = RunService.Stepped:Connect(function()
-		if not ENABLED then return end
-		for _, v in pairs(char:GetDescendants()) do
-			if v:IsA("BasePart") then
-				v.CanCollide = false
-				v.Massless = true
-			end
-		end
-	end)
-end
-
-local function disableNoclip(char)
-	if noclipConn then 
-		noclipConn:Disconnect() 
-		noclipConn = nil
-	end
-	
-	task.wait(0.1)
-	for _, v in pairs(char:GetDescendants()) do
-		if v:IsA("BasePart") then
-			if v.Name == "HumanoidRootPart" then
-				v.CanCollide = false
-			else
-				v.CanCollide = true
-			end
-			v.Massless = false
-		end
-	end
-end
-
--- FLY TO POSITION
-local function flyDirectTo(hrp, targetPos)
-	if not hrp or not hrp.Parent or not ENABLED then
-		return false
-	end
-	
-	print("Flying to: " .. tostring(targetPos))
-	
-	local startTime = tick()
-	local timeout = 120
-	local completed = false
-	
-	if flyConn then flyConn:Disconnect() end
-	
-	flyConn = RunService.Heartbeat:Connect(function(dt)
-		if not ENABLED or not hrp or not hrp.Parent then
-			completed = false
-			if flyConn then flyConn:Disconnect() end
-			return
-		end
-		
-		local currentPos = hrp.Position
-		local direction = (targetPos - currentPos).Unit
-		local distance = (targetPos - currentPos).Magnitude
-		
-		if distance <= arrivalThreshold then
-			hrp.CFrame = CFrame.new(targetPos)
-			completed = true
-			if flyConn then flyConn:Disconnect() end
-			return
-		end
-		
-		if tick() - startTime > timeout then
-			completed = false
-			if flyConn then flyConn:Disconnect() end
-			return
-		end
-		
-		local moveDistance = math.min(SPEED * dt, distance)
-		local newPos = currentPos + (direction * moveDistance)
-		hrp.CFrame = CFrame.new(newPos)
-	end)
-	
-	while not completed and ENABLED do
-		if tick() - startTime > timeout then
-			if flyConn then flyConn:Disconnect() end
-			return false
-		end
-		task.wait()
-	end
-	
-	return completed
-end
-
--- INSTANT PICKUP - BỎ THỜI GIAN CHỜ KHI BẤM E
-local function enableInstantPickup()
-	if promptConn then promptConn:Disconnect() end
-	promptConn = ProximityPromptService.PromptShown:Connect(function(p)
-		if not ENABLED then return end
-		
-		pcall(function()
-			local isRobuxPrompt = p.Name:lower():find("buy") or 
-								 p.Name:lower():find("purchase") or 
-								 p.ActionText:lower():find("buy") or
-								 p.ActionText:lower():find("robux")
-			
-			if not isRobuxPrompt then
-				-- BỎ THỜI GIAN CHỜ
-				p.HoldDuration = 0
-				task.wait()
-				-- TỰ ĐỘNG BẤM E
-				fireproximityprompt(p)
-			end
-		end)
-	end)
-end
-
-local function disableInstantPickup()
-	if promptConn then 
-		promptConn:Disconnect() 
-		promptConn = nil
-	end
-end
-
--- STOP AND CLEANUP
-local function stopAndCleanup()
-	print("Stopping...")
-	ENABLED = false
-	
-	if flyConn then 
-		flyConn:Disconnect() 
-		flyConn = nil
-	end
-	
-	local success, char, hrp, hum = pcall(getChar)
-	if not success or not char then
-		print("Character not found")
-		return
-	end
-	
-	disableNoclip(char)
-	workspace.Gravity = 196.2
-	
-	if hum then
-		hum.PlatformStand = false
-		hum.Sit = false
-		hum:ChangeState(Enum.HumanoidStateType.Freefall)
-	end
-	
-	if hrp then
-		hrp.Anchored = false
-		hrp.Velocity = Vector3.new(0, 0, 0)
-		hrp.RotVelocity = Vector3.new(0, 0, 0)
-		hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-		hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-	end
-	
-	task.wait(0.3)
-	if hum then
-		hum:ChangeState(Enum.HumanoidStateType.GettingUp)
-		task.wait(0.2)
-		hum:ChangeState(Enum.HumanoidStateType.Running)
-	end
-	
-	for _, part in pairs(char:GetDescendants()) do
-		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
-			part.CanCollide = true
-			part.Massless = false
-			part.Velocity = Vector3.new(0, 0, 0)
-			part.RotVelocity = Vector3.new(0, 0, 0)
-		end
-	end
-	
-	disableInstantPickup()
-	unblockRobuxPrompts()
-	
-	print("Stopped successfully")
-end
-
--- MAIN FUNCTION
-local function run(points, direction)
-	local char, hrp, hum = getChar()
-	
-	enableNoclip(char)
-	enableInstantPickup()
-	blockRobuxPrompts()
-	
-	workspace.Gravity = 0
-	hum:ChangeState(Enum.HumanoidStateType.Physics)
-	
-	print("Flying " .. direction .. "...")
-	
-	for i, pos in ipairs(points) do
-		if not ENABLED then break end
-		
-		print("Point " .. i .. "/" .. #points)
-		local success = flyDirectTo(hrp, pos)
-		
-		if not success then
-			print("Failed at point " .. i)
-			break
-		end
-		
-		print("Reached point " .. i)
-		task.wait(0.3)
-	end
-	
-	if ENABLED then
-		print("Completed " .. direction .. "!")
-		stopAndCleanup()
-	end
-end
-
--- CREATE GUI
-local gui = Instance.new("ScreenGui", PlayerGui)
-gui.ResetOnSpawn = false
-gui.Name = "HungDaoFlyGUI"
-
-local frame = Instance.new("Frame", gui)
-frame.Size = UDim2.fromOffset(220, 100)
-frame.Position = UDim2.fromScale(0.4, 0.45)
-frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-frame.Active = true
-frame.Draggable = true
-frame.BorderSizePixel = 0
-
-local corner = Instance.new("UICorner", frame)
-corner.CornerRadius = UDim.new(0, 12)
-
-local stroke = Instance.new("UIStroke", frame)
-stroke.Color = Color3.fromRGB(255, 255, 255)
-stroke.Thickness = 2
-
-local btnGo = Instance.new("TextButton", frame)
-btnGo.Size = UDim2.new(0.42, 0, 0.5, 0)
-btnGo.Position = UDim2.new(0.05, 0, 0.35, 0)
-btnGo.Font = Enum.Font.GothamBold
-btnGo.TextSize = 18
-btnGo.TextColor3 = Color3.new(1, 1, 1)
-btnGo.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-btnGo.Text = "DI"
-btnGo.BorderSizePixel = 0
-
-local btnGoCorner = Instance.new("UICorner", btnGo)
-btnGoCorner.CornerRadius = UDim.new(0, 8)
-
-local btnGoStroke = Instance.new("UIStroke", btnGo)
-btnGoStroke.Color = Color3.fromRGB(255, 255, 255)
-btnGoStroke.Thickness = 1
-
-local btnBack = Instance.new("TextButton", frame)
-btnBack.Size = UDim2.new(0.42, 0, 0.5, 0)
-btnBack.Position = UDim2.new(0.53, 0, 0.35, 0)
-btnBack.Font = Enum.Font.GothamBold
-btnBack.TextSize = 18
-btnBack.TextColor3 = Color3.new(1, 1, 1)
-btnBack.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-btnBack.Text = "VE"
-btnBack.BorderSizePixel = 0
-
-local btnBackCorner = Instance.new("UICorner", btnBack)
-btnBackCorner.CornerRadius = UDim.new(0, 8)
-
-local btnBackStroke = Instance.new("UIStroke", btnBack)
-btnBackStroke.Color = Color3.fromRGB(255, 255, 255)
-btnBackStroke.Thickness = 1
-
-local label = Instance.new("TextLabel", frame)
-label.Size = UDim2.new(0.9, 0, 0.2, 0)
-label.Position = UDim2.new(0.05, 0, 0.05, 0)
-label.Font = Enum.Font.GothamBold
-label.TextSize = 14
-label.TextColor3 = Color3.new(1, 1, 1)
-label.BackgroundTransparency = 1
-label.Text = "READY"
-
--- BUTTON EVENTS
-btnGo.MouseButton1Click:Connect(function()
-	if ENABLED then
-		stopAndCleanup()
-		btnGo.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-		btnBack.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-		label.Text = "STOPPED"
-		task.wait(1)
-		label.Text = "READY"
-		return
-	end
-	
-	ENABLED = true
-	btnGo.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
-	btnBack.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-	label.Text = "FLYING..."
-	
-	task.spawn(function()
-		run(POINTS_GO, "GO")
-		btnGo.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-		label.Text = "DONE"
-		task.wait(1)
-		label.Text = "READY"
-	end)
+workspace.DescendantAdded:Connect(function(v)
+    if v:IsA("TouchTransmitter") or v:IsA("ProximityPrompt") or v:IsA("ClickDetector") then
+        nuke(v)
+    end
+    if v:IsA("Part") or v:IsA("MeshPart") then
+        local n = v.Name:lower()
+        if n:find("vip") or n:find("premium") or n:find("cao") then
+            nuke(v)
+        end
+    end
 end)
 
-btnBack.MouseButton1Click:Connect(function()
-	if ENABLED then
-		stopAndCleanup()
-		btnGo.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-		btnBack.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-		label.Text = "STOPPED"
-		task.wait(1)
-		label.Text = "READY"
-		return
-	end
-	
-	ENABLED = true
-	btnBack.BackgroundColor3 = Color3.fromRGB(255, 165, 0)
-	btnGo.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-	label.Text = "RETURNING..."
-	
-	task.spawn(function()
-		run(POINTS_BACK, "BACK")
-		btnBack.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-		label.Text = "DONE"
-		task.wait(1)
-		label.Text = "READY"
-	end)
+-- ============================================
+-- TOÁN HỌC
+-- ============================================
+
+-- Chiếu P xuống dây AB
+local function projectOntoLine(P)
+    local AP = P - A
+    local t = math.clamp(AP:Dot(AB) / AB:Dot(AB), 0, 1)
+    return A + AB * t
+end
+
+-- Tính khoảng cách từ điểm trên dây đến A (dùng để so sánh)
+local function distanceFromA(point)
+    return (point - A).Magnitude
+end
+
+-- ============================================
+-- TÌM ITEMS - SỬA LỖI
+-- ============================================
+
+local function findAllItems()
+    local tickets = {}
+    local consoles = {}
+    
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if not obj:IsA("BasePart") and not obj:IsA("MeshPart") then
+            continue
+        end
+        
+        local y = obj.Position.Y
+        if y < MIN_Y or y > MAX_Y then
+            continue
+        end
+        
+        -- Bỏ qua item đang rơi/bay
+        if obj.AssemblyLinearVelocity.Magnitude > 5 then
+            continue
+        end
+        
+        local name = obj.Name
+        
+        -- TÌM TICKET (ưu tiên cao nhất)
+        if name == "Rayshield" or 
+           name == "Ticket" or 
+           name == "GoldenTicket" or
+           (obj.Parent and (obj.Parent.Name == "Rayshield" or 
+                           obj.Parent.Name == "Ticket" or
+                           obj.Parent.Name:find("Ticket"))) then
+            table.insert(tickets, obj)
+            
+        -- GAME CONSOLE (ưu tiên thấp hơn)
+        elseif name == "Game Console" then
+            table.insert(consoles, obj)
+        end
+    end
+    
+    return tickets, consoles
+end
+
+-- ============================================
+-- TÌM ITEM GÁN NHẤT TỪ VỊ TRÍ HIỆN TẠI
+-- ============================================
+
+local function findNearestItem(currentPosOnLine)
+    local tickets, consoles = findAllItems()
+    
+    -- Ưu tiên TICKET trước
+    if #tickets > 0 then
+        local nearestTicket = nil
+        local minDist = math.huge
+        
+        for _, ticket in ipairs(tickets) do
+            local projection = projectOntoLine(ticket.Position)
+            local dist = (projection - currentPosOnLine).Magnitude
+            
+            if dist < minDist then
+                minDist = dist
+                nearestTicket = ticket
+            end
+        end
+        
+        if nearestTicket then
+            return nearestTicket, "TICKET"
+        end
+    end
+    
+    -- Nếu không có ticket, lấy console gần nhất
+    if #consoles > 0 then
+        local nearestConsole = nil
+        local minDist = math.huge
+        
+        for _, console in ipairs(consoles) do
+            local projection = projectOntoLine(console.Position)
+            local dist = (projection - currentPosOnLine).Magnitude
+            
+            if dist < minDist then
+                minDist = dist
+                nearestConsole = console
+            end
+        end
+        
+        if nearestConsole then
+            return nearestConsole, "CONSOLE"
+        end
+    end
+    
+    return nil, nil
+end
+
+-- ============================================
+-- KIỂM TRA AN TOÀN - SỬA LỖI
+-- ============================================
+
+local function isSafeToCollect(itemPos, touchPoint)
+    local distToItem = (itemPos - touchPoint).Magnitude
+    
+    -- Thời gian bay ra + bay về
+    local totalTime = (distToItem * 2) / FLY_SPEED
+    
+    -- Tìm tsunami gần nhất
+    local nearestTsunamiTime = math.huge
+    
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("UnionOperation") and obj.Name:find("Wave") then
+            if obj.Parent then
+                local tsunamiType = obj.Parent.Name
+                local speed = TSUNAMI_SPEEDS[tsunamiType] or 100
+                
+                -- Tính khoảng cách từ sóng đến điểm chạm
+                local tsunamiDist = (obj.Position - touchPoint).Magnitude
+                local tsunamiTime = tsunamiDist / speed
+                
+                if tsunamiTime < nearestTsunamiTime then
+                    nearestTsunamiTime = tsunamiTime
+                end
+            end
+        end
+    end
+    
+    -- Phải có đủ buffer
+    local isSafe = totalTime + SAFETY_BUFFER < nearestTsunamiTime
+    
+    if not isSafe then
+        print(string.format("⚠️ Không an toàn | Bay: %.1fs | Sóng: %.1fs", totalTime, nearestTsunamiTime))
+    end
+    
+    return isSafe
+end
+
+-- ============================================
+-- BAY - SỬA LỖI
+-- ============================================
+
+local activeConnection = nil
+
+local function stopFlying()
+    if activeConnection then
+        activeConnection:Disconnect()
+        activeConnection = nil
+    end
+end
+
+local function flyTo(targetPos)
+    stopFlying()
+    
+    local character = player.Character
+    if not character then return end
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    
+    -- Tắt va chạm
+    for _, part in pairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.CanCollide = false
+        end
+    end
+    
+    local startPos = hrp.Position
+    local distance = (targetPos - startPos).Magnitude
+    
+    if distance < 2 then
+        hrp.CFrame = CFrame.new(targetPos)
+        return
+    end
+    
+    local duration = distance / FLY_SPEED
+    local startTime = tick()
+    
+    activeConnection = RunService.Heartbeat:Connect(function()
+        if not character or not character.Parent then
+            stopFlying()
+            return
+        end
+        
+        hrp = character:FindFirstChild("HumanoidRootPart")
+        if not hrp then
+            stopFlying()
+            return
+        end
+        
+        local elapsed = tick() - startTime
+        local alpha = math.min(elapsed / duration, 1)
+        
+        hrp.CFrame = CFrame.new(startPos:Lerp(targetPos, alpha))
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        
+        if alpha >= 1 then
+            stopFlying()
+        end
+    end)
+    
+    task.wait(duration + 0.05)
+    stopFlying()
+end
+
+-- ============================================
+-- MAIN LOOP - LOGIC ĐÚNG
+-- ============================================
+
+local function startAutoCollect()
+    local character = player.Character
+    if not character then return end
+    
+    print("\n📍 GIAI ĐOẠN 1: Kéo về A")
+    flyTo(A)
+    
+    -- Vị trí hiện tại trên dây
+    local currentPosOnLine = A
+    
+    while AUTO_COLLECT do
+        character = player.Character
+        if not character then
+            task.wait(1)
+            continue
+        end
+        
+        print("\n📍 GIAI ĐOẠN 2: Tìm item")
+        
+        -- Tìm item gần nhất từ vị trí hiện tại
+        local item, itemType = findNearestItem(currentPosOnLine)
+        
+        if not item then
+            print("❌ Không còn item, chờ...")
+            task.wait(2)
+            continue
+        end
+        
+        print(string.format("✅ Tìm thấy: %s", itemType))
+        
+        -- GIAI ĐOẠN 4: Tính điểm chạm
+        local touchPoint = projectOntoLine(item.Position)
+        
+        print(string.format("📍 GIAI ĐOẠN 4: Điểm chạm (%.1f, %.1f, %.1f)", 
+            touchPoint.X, touchPoint.Y, touchPoint.Z))
+        
+        -- GIAI ĐOẠN 5: Trượt dọc dây đến điểm chạm
+        print("📍 GIAI ĐOẠN 5: Trượt dọc dây")
+        flyTo(touchPoint)
+        
+        -- Cập nhật vị trí hiện tại
+        currentPosOnLine = touchPoint
+        
+        -- GIAI ĐOẠN 6: Phân tích tsunami
+        print("📍 GIAI ĐOẠN 6: Kiểm tra tsunami")
+        
+        local safe = isSafeToCollect(item.Position, touchPoint)
+        
+        if safe then
+            -- GIAI ĐOẠN 7A: Nhặt
+            print("✅ GIAI ĐOẠN 7A: An toàn, nhặt item")
+            
+            flyTo(item.Position)
+            task.wait(0.2) -- Đợi nhặt
+            
+            -- Quay về điểm chạm
+            flyTo(touchPoint)
+            
+            print("✅ Nhặt xong, tiếp tục từ điểm chạm")
+            
+        else
+            -- GIAI ĐOẠN 7B: Bỏ qua
+            print("⚠️ GIAI ĐOẠN 7B: Không an toàn, bỏ qua")
+        end
+        
+        task.wait(0.3)
+    end
+end
+
+-- ============================================
+-- AUTO RESPAWN
+-- ============================================
+
+if player.Character then
+    task.spawn(startAutoCollect)
+end
+
+player.CharacterAdded:Connect(function(character)
+    print("\n📍 GIAI ĐOẠN 9: Respawn, reset về A")
+    stopFlying()
+    character:WaitForChild("HumanoidRootPart")
+    task.wait(0.5)
+    task.spawn(startAutoCollect)
 end)
 
--- RESPAWN HANDLER
-player.CharacterAdded:Connect(function()
-	if ENABLED then
-		task.wait(1)
-		stopAndCleanup()
-		btnGo.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-		btnBack.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-		label.Text = "READY"
-	end
-end)
-
-print("HungDao9999 Script Loaded!")
+print("\n✅ Script sẵn sàng!")
+print(string.format("📍 A: (%.1f, %.1f, %.1f)", A.X, A.Y, A.Z))
+print(string.format("📍 B: (%.1f, %.1f, %.1f)", B.X, B.Y, B.Z))
+print("🎟️ Ưu tiên: Ticket > Console")
